@@ -12,6 +12,7 @@ SPREADSHEET_ID = '16oZFGDacad4ewfy_tQTz3OXkgiqPW2-IwuklU-An8Yk'
 
 def get_gspread_client():
     try:
+        # Streamlit Cloud 배포 시 Secrets 설정 필요
         creds_info = st.secrets["gcp_service_account"]
         scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
         creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
@@ -30,20 +31,25 @@ def process_excel(uploaded_file, columns, input_password):
             office_file = msoffcrypto.OfficeFile(io.BytesIO(file_bytes))
             if office_file.is_encrypted():
                 if not input_password:
-                    st.warning("🔑 암호가 걸린 파일입니다.")
+                    st.warning("🔑 암호가 걸린 파일입니다. 비밀번호를 입력해 주세요.")
                     return None
                 office_file.load_key(password=input_password)
                 office_file.decrypt(decrypted_workbook)
             else:
                 decrypted_workbook = io.BytesIO(file_bytes)
+            # dtype=str로 읽어 지수 표현(E+) 방지 및 openpyxl 엔진 사용
             df = pd.read_excel(decrypted_workbook, usecols=columns, dtype=str, index_col=None, engine='openpyxl').fillna('')
         elif file_extension == 'xls':
             df = pd.read_excel(io.BytesIO(file_bytes), usecols=columns, engine='xlrd', dtype=str, index_col=None).fillna('')
         
+        # 중복된 컬럼명 고유화 처리
         cols = pd.Series(df.columns)
         for i, col in enumerate(cols):
-            if cols.duplicated()[i]: cols[i] = f"{col}_{i}"
+            if cols.duplicated()[i]:
+                cols[i] = f"{col}_{i}"
         df.columns = cols
+
+        # Unnamed 열 제거 및 인덱스 초기화
         df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
         return df.reset_index(drop=True)
     except Exception as e:
@@ -63,23 +69,28 @@ def run_upload_ui(title, columns, sheet_name):
         pw = st.text_input("비밀번호 입력", type="password", key=f"pw_{sheet_name}")
         if st.button("🔓 데이터 불러오기", key=f"btn_{sheet_name}"):
             df = process_excel(uploaded_file, columns, pw)
-            if df is not None: st.session_state[f'df_{sheet_name}'] = df
+            if df is not None:
+                st.session_state[f'df_{sheet_name}'] = df
         
         if f'df_{sheet_name}' in st.session_state:
             df = st.session_state[f'df_{sheet_name}']
+            st.write("▼ 업로드 데이터 미리보기 (첫 행 포함)")
             st.dataframe(df.head())
+            
             if st.button(f"🚀 {sheet_name} 시트로 최종 업로드"):
-                with st.spinner('업로드 중...'):
+                with st.spinner('시트 갱신 중...'):
                     client = get_gspread_client()
                     if client:
                         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(sheet_name)
-                        header, data_values = df.columns.values.tolist(), df.values.tolist()
+                        header = df.columns.values.tolist()
+                        data_values = df.values.tolist()
+                        full_data = [header] + data_values
                         sheet.clear()
-                        sheet.update('A1', [header] + data_values, value_input_option='USER_ENTERED')
-                        st.success("✅ 업로드 완료!")
+                        sheet.update('A1', full_data, value_input_option='USER_ENTERED')
+                        st.success(f"✅ {sheet_name} 업로드 완료!")
                         del st.session_state[f'df_{sheet_name}']
 
-# --- [4. 정산 데이터 생성 및 결과 표시] ---
+# --- [4. 정산 데이터 생성] ---
 if menu == "정산 데이터 생성":
     st.subheader("📅 월별 정산 실행")
     current_year = datetime.now().year
@@ -87,7 +98,7 @@ if menu == "정산 데이터 생성":
     
     if st.button("📊 정산 실행"):
         try:
-            with st.spinner('정산 계산 중...'):
+            with st.spinner('정산 데이터를 계산하고 있습니다...'):
                 client = get_gspread_client()
                 if client:
                     gaib_sheet = client.open_by_key(SPREADSHEET_ID).worksheet("위멤버스 가입자")
@@ -126,7 +137,7 @@ if menu == "정산 데이터 생성":
                         else:
                             df_gaib['사용자수'] = 0
 
-                        # 필터링
+                        # 필터링 로직 (H=7, J=9, L=11, M=12)
                         def filter_rows(row):
                             if str(row.iloc[10]) == 'TEST' or str(row.iloc[7]) == '휴폐업' or str(row.iloc[2]) == '위멤버스 베이직':
                                 return False
@@ -145,7 +156,7 @@ if menu == "정산 데이터 생성":
 
                         df_gaib = df_gaib[df_gaib.apply(filter_rows, axis=1)]
 
-                        # 제품명 버전
+                        # 제품명 버전 판별
                         def get_versioned_product_name(row):
                             product_name = str(row.iloc[2]).strip()
                             try:
@@ -159,30 +170,48 @@ if menu == "정산 데이터 생성":
 
                         df_gaib['제품명_버전'] = df_gaib.apply(get_versioned_product_name, axis=1)
 
-                        def calculate_final(row):
+                        # 요금 세부 계산 (기본요금, 사용자추가금 분할)
+                        def calculate_details(row):
                             gaib_no = str(row.iloc[0]).strip()
                             if gaib_no in special_map:
                                 try:
-                                    p = int(str(special_map[gaib_no]).replace(",", "")); return pd.Series([p, int(p * 0.1)])
+                                    p = int(str(special_map[gaib_no]).replace(",", ""))
+                                    return pd.Series([p, 0, p, int(p * 0.1)])
                                 except: pass
+                            
                             try:
-                                service, user_cnt = str(row.iloc[2]), int(row['사용자수'])
-                                join_dt, base_dt = pd.to_datetime(row.iloc[3]), pd.to_datetime('2025-01-01')
+                                service = str(row.iloc[2])
+                                user_cnt = int(row['사용자수'])
+                                join_dt = pd.to_datetime(row.iloc[3])
+                                base_dt = pd.to_datetime('2025-01-01')
+                                
                                 base_price = 0
-                                if '스탠다드' in service: base_price = 30000 if join_dt < base_dt else 36000
-                                elif '프리미엄' in service: base_price = 50000 if join_dt < base_dt else 60000
-                                extra = 0
-                                if '스탠다드' in service and user_cnt > 2: extra = (user_cnt - 2) * 10000
-                                elif '프리미엄' in service and user_cnt > 5: extra = (user_cnt - 5) * 10000
-                                f = base_price + extra; return pd.Series([f, int(f * 0.1)])
-                            except: return pd.Series([0, 0])
+                                if '스탠다드' in service:
+                                    base_price = 30000 if join_dt < base_dt else 36000
+                                elif '프리미엄' in service:
+                                    base_price = 50000 if join_dt < base_dt else 60000
+                                
+                                extra_price = 0
+                                if '스탠다드' in service and user_cnt > 2:
+                                    extra_price = (user_cnt - 2) * 10000
+                                elif '프리미엄' in service and user_cnt > 5:
+                                    extra_price = (user_cnt - 5) * 10000
+                                
+                                final_price = base_price + extra_price
+                                return pd.Series([base_price, extra_price, final_price, int(final_price * 0.1)])
+                            except:
+                                return pd.Series([0, 0, 0, 0])
 
-                        df_gaib[['최종정산금액', '부가세']] = df_gaib.apply(calculate_final, axis=1)
+                        df_gaib[['기본요금', '사용자추가금', '최종정산금액', '부가세']] = df_gaib.apply(calculate_details, axis=1)
                         df_gaib['입금일자'] = payment_date
                         df_gaib['결제코드'] = df_gaib.iloc[:, 11].apply(lambda x: 'A' if '자동이체' in str(x) else ('C' if '신용카드' in str(x) else x))
 
-                        result_df = df_gaib[[df_gaib.columns[0], df_gaib.columns[1], '입금일자', '제품명_버전', '결제코드', '사용자수', '최종정산금액', '부가세']]
-                        result_df.columns = ['가입번호', '거래처명', '입금일자', '제품명', '결제코드', '사용자수', '최종정산금액', '부가세']
+                        # 결과 테이블 구성
+                        result_df = df_gaib[[
+                            df_gaib.columns[0], df_gaib.columns[1], '입금일자', '제품명_버전', '결제코드', 
+                            '사용자수', '기본요금', '사용자추가금', '최종정산금액', '부가세'
+                        ]]
+                        result_df.columns = ['가입번호', '거래처명', '입금일자', '제품명', '결제코드', '사용자수', '기본요금', '사용자추가금', '최종정산금액', '부가세']
                         st.session_state['result_df'] = result_df.reset_index(drop=True)
                         st.success(f"✅ {target_month} 정산 완료!")
 
@@ -191,7 +220,12 @@ if menu == "정산 데이터 생성":
 
     if 'result_df' in st.session_state:
         res = st.session_state['result_df']
-        st.info("**📌 정산 안내 사항**\n1. 프리미엄 1.0: 50,000 / 스탠다드 1.0: 30,000\n2. 프리미엄 2.0: 60,000 /  스탠다드 2.0: 36,000\n3. 코드 A: 자동이체 /  코드 C: 신용카드")
+        st.info("""
+        **📌 정산 안내 사항**
+        1. 프리미엄 1.0: 50,000 /  스탠다드 1.0: 30,000
+        2. 프리미엄 2.0: 60,000 /  스탠다드 2.0: 36,000
+        3. 결제코드 A: 자동이체 /  결제코드 C: 신용카드
+        """)
         
         st.markdown("### 📊 정산 요약")
         c1, c2, c3, c4 = st.columns(4)
@@ -207,25 +241,13 @@ if menu == "정산 데이터 생성":
             res.to_excel(writer, index=False, sheet_name='정산내역')
         st.download_button("📥 엑셀 다운로드", output.getvalue(), f"정산_{target_month}.xlsx", "application/vnd.ms-excel")
 
-# --- [5. 데이터 초기화 메뉴] ---
 elif menu == "데이터 초기화":
-    st.subheader("🗑️ 구글 시트 데이터 초기화")
-    st.warning("주의: 초기화 시 시트의 모든 데이터가 영구적으로 삭제됩니다.")
-    
-    target_sheet = st.radio("초기화할 시트를 선택하세요", ["위멤버스 가입자", "위멤버스 사용자"])
-    
-    if st.button(f"🔥 {target_sheet} 시트 초기화"):
-        with st.spinner(f'{target_sheet} 데이터를 삭제 중...'):
-            client = get_gspread_client()
-            if client:
-                try:
-                    sheet = client.open_by_key(SPREADSHEET_ID).worksheet(target_sheet)
-                    sheet.clear()
-                    st.success(f"✅ {target_sheet} 시트가 성공적으로 초기화되었습니다.")
-                except Exception as e:
-                    st.error(f"초기화 중 오류 발생: {e}")
+    st.subheader("🗑️ 시트 데이터 초기화")
+    target_sheet = st.radio("초기화할 시트", ["위멤버스 가입자", "위멤버스 사용자"])
+    if st.button(f"🔥 {target_sheet} 초기화"):
+        client = get_gspread_client()
+        if client: client.open_by_key(SPREADSHEET_ID).worksheet(target_sheet).clear(); st.success(f"{target_sheet} 초기화 완료")
 
-# 업로드 분기
 elif menu == "가입자 시트 업로드":
     run_upload_ui("가입자 데이터", [0, 2, 4, 6, 16, 17, 18, 22, 23, 24, 25, 68, 74, 80, 83], "위멤버스 가입자")
 elif menu == "사용자 시트 업로드":
