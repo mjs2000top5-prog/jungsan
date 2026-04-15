@@ -1,0 +1,6 @@
+streamlit
+pandas
+gspread
+msoffcrypto-tool
+xlsxwriter
+google-auth
