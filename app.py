@@ -108,19 +108,16 @@ if menu == "정산 데이터 생성":
                         df_gaib.columns = temp_cols
                         df_gaib = df_gaib.loc[:, ~df_gaib.columns.str.contains('^Unnamed|^$')].reset_index(drop=True)
 
-                        # 별도 요금제 매핑
                         special_map = {}
                         if len(special_raw) >= 2:
                             df_special = pd.DataFrame(special_raw[1:], columns=special_raw[0])
                             special_map = df_special.set_index(df_special.columns[0])[df_special.columns[4]].to_dict()
 
-                        # 날짜 처리
                         target_dt = datetime.strptime(target_month, "%Y-%m")
                         payment_date = target_dt.strftime("%Y%m") + "11"
                         prev_dt = datetime(target_dt.year - 1, 12, 1) if target_dt.month == 1 else datetime(target_dt.year, target_dt.month - 1, 1)
                         prev_month_str = prev_dt.strftime("%Y%m")
 
-                        # 사용자 수 매핑
                         if len(user_raw) >= 2:
                             df_user = pd.DataFrame(user_raw[1:], columns=user_raw[0])
                             df_user_filtered = df_user[~df_user.iloc[:, 0].apply(lambda x: str(x).replace("-", "")[:6] == prev_month_str)]
@@ -129,29 +126,21 @@ if menu == "정산 데이터 생성":
                         else:
                             df_gaib['사용자수'] = 0
 
-                        # [필터링 로직] 비대면 바우처 및 기본 필터링
-                        # H열=인덱스 7, J열=인덱스 9 (면제 종료월)
                         def filter_rows(row):
                             if str(row.iloc[10]) == 'TEST' or str(row.iloc[7]) == '휴폐업' or str(row.iloc[2]) == '위멤버스 베이직':
                                 return False
                             if str(row.iloc[3]).replace("-", "")[:6] == prev_month_str:
                                 return False
-                            
-                            # 비대면_바우처 제외 로직 (J열 확인)
                             if str(row.iloc[7]) == '비대면_바우처':
                                 try:
-                                    # J열의 면제 종료월 추출
                                     myeonje_end = str(row.iloc[9]).replace("-", "")[:6]
                                     target_str = target_month.replace("-", "")
-                                    # 면제 종료월 >= 정산 대상월 이면 제외
-                                    if myeonje_end >= target_str:
-                                        return False
+                                    if myeonje_end >= target_str: return False
                                 except: pass
                             return True
 
                         df_gaib = df_gaib[df_gaib.apply(filter_rows, axis=1)]
 
-                        # 금액 계산
                         def calculate_final(row):
                             gaib_no = str(row.iloc[0]).strip()
                             if gaib_no in special_map:
@@ -183,11 +172,27 @@ if menu == "정산 데이터 생성":
 
     if 'result_df' in st.session_state:
         res = st.session_state['result_df']
+        
+        # --- [요청 사항: 합계 정보 요약 대시보드 추가] ---
+        total_users = res['사용자수'].sum()
+        total_amount = res['최종정산금액'].sum()
+        total_vat = res['부가세'].sum()
+        total_sum = total_amount + total_vat
+
+        st.markdown("### 📊 정산 요약")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("총 사용자수", f"{total_users:,} 명")
+        col2.metric("공급가액 합계", f"{total_amount:,} 원")
+        col3.metric("부가세 합계", f"{total_vat:,} 원")
+        col4.metric("최종 합계(VAT포함)", f"{total_sum:,} 원")
+        
+        st.divider()
         st.dataframe(res)
+        
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             res.to_excel(writer, index=False, sheet_name='정산내역')
-        st.download_button("📥 엑셀 다운로드", output.getvalue(), f"정산_{target_month}.xlsx", "application/vnd.ms-excel")
+        st.download_button("📥 정산 결과 엑셀 다운로드", output.getvalue(), f"정산_{target_month}.xlsx", "application/vnd.ms-excel")
 
 elif menu == "가입자 시트 업로드":
     run_upload_ui("가입자 데이터", [0, 2, 4, 6, 16, 17, 18, 22, 23, 24, 25, 68, 74, 80, 83], "위멤버스 가입자")
