@@ -102,7 +102,6 @@ if menu == "정산 데이터 생성":
                         st.error("가입자 데이터가 부족합니다.")
                     else:
                         df_gaib = pd.DataFrame(gaib_raw[1:], columns=gaib_raw[0])
-                        # 인덱스 초기화 및 컬럼 정제
                         temp_cols = pd.Series(df_gaib.columns)
                         for i, col in enumerate(temp_cols):
                             if temp_cols.duplicated()[i]: temp_cols[i] = f"{col}_{i}"
@@ -130,22 +129,21 @@ if menu == "정산 데이터 생성":
                         else:
                             df_gaib['사용자수'] = 0
 
-                        # [핵심 로직] 비대면 바우처 및 기본 필터링
-                        # H열=인덱스 7, I열=인덱스 8
+                        # [필터링 로직] 비대면 바우처 및 기본 필터링
+                        # H열=인덱스 7, J열=인덱스 9 (면제 종료월)
                         def filter_rows(row):
-                            # 1. 기본 필터링 (TEST 업체, 휴폐업, 베이직 제외)
                             if str(row.iloc[10]) == 'TEST' or str(row.iloc[7]) == '휴폐업' or str(row.iloc[2]) == '위멤버스 베이직':
                                 return False
-                            # 2. 전월 가입자 제외
                             if str(row.iloc[3]).replace("-", "")[:6] == prev_month_str:
                                 return False
-                            # 3. 비대면_바우처 제외 로직 (H열 확인)
+                            
+                            # 비대면_바우처 제외 로직 (J열 확인)
                             if str(row.iloc[7]) == '비대면_바우처':
                                 try:
-                                    # I열의 면제 종료월 추출 (YYYY-MM 형식 가정)
-                                    myeonje_end = str(row.iloc[8]).replace("-", "")[:6]
+                                    # J열의 면제 종료월 추출
+                                    myeonje_end = str(row.iloc[9]).replace("-", "")[:6]
                                     target_str = target_month.replace("-", "")
-                                    # 면제 종료월 >= 정산 대상월 이면 제외 (정산 안 함)
+                                    # 면제 종료월 >= 정산 대상월 이면 제외
                                     if myeonje_end >= target_str:
                                         return False
                                 except: pass
