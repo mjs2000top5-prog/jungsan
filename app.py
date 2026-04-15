@@ -7,7 +7,7 @@ import xlsxwriter
 from datetime import datetime
 from google.oauth2.service_account import Credentials
 
-# --- [1. 구글 스프레드시트 설정 (Secrets 기반)] ---
+# --- [1. 구글 스프레드시트 설정] ---
 SPREADSHEET_ID = '16oZFGDacad4ewfy_tQTz3OXkgiqPW2-IwuklU-An8Yk'
 
 def get_gspread_client():
@@ -79,7 +79,7 @@ def run_upload_ui(title, columns, sheet_name):
                         st.success("✅ 업로드 완료!")
                         del st.session_state[f'df_{sheet_name}']
 
-# --- [4. 정산 데이터 생성] ---
+# --- [4. 정산 데이터 생성 및 결과 표시] ---
 if menu == "정산 데이터 생성":
     st.subheader("📅 월별 정산 실행")
     current_year = datetime.now().year
@@ -126,7 +126,7 @@ if menu == "정산 데이터 생성":
                         else:
                             df_gaib['사용자수'] = 0
 
-                        # 필터링 로직
+                        # 필터링
                         def filter_rows(row):
                             if str(row.iloc[10]) == 'TEST' or str(row.iloc[7]) == '휴폐업' or str(row.iloc[2]) == '위멤버스 베이직':
                                 return False
@@ -145,7 +145,7 @@ if menu == "정산 데이터 생성":
 
                         df_gaib = df_gaib[df_gaib.apply(filter_rows, axis=1)]
 
-                        # 제품명 버전 관리
+                        # 제품명 버전
                         def get_versioned_product_name(row):
                             product_name = str(row.iloc[2]).strip()
                             try:
@@ -159,7 +159,6 @@ if menu == "정산 데이터 생성":
 
                         df_gaib['제품명_버전'] = df_gaib.apply(get_versioned_product_name, axis=1)
 
-                        # 금액 계산
                         def calculate_final(row):
                             gaib_no = str(row.iloc[0]).strip()
                             if gaib_no in special_map:
@@ -192,44 +191,42 @@ if menu == "정산 데이터 생성":
 
     if 'result_df' in st.session_state:
         res = st.session_state['result_df']
+        st.info("**📌 정산 안내 사항**\n1. 프리미엄 1.0: 50,000 / 2. 스탠다드 1.0: 30,000\n3. 프리미엄 2.0: 60,000 / 4. 스탠다드 2.0: 36,000\n5. 코드 A: 자동이체 / 6. 코드 C: 신용카드")
         
-        # --- [안내 사항 추가] ---
-        st.info("""
-        **📌 정산 안내 사항**
-        1. 위멤버스 프리미엄 1.0 : 50,000원
-        2. 위멤버스 스탠다드 1.0 : 30,000원
-        3. 위멤버스 프리미엄 2.0 : 60,000원
-        4. 위멤버스 스탠다드 2.0 : 36,000원
-        5. 결제코드 **A** : 자동이체
-        6. 결제코드 **C** : 신용카드
-        """)
-
-        # 합계 정보 요약
-        total_users = res['사용자수'].sum()
-        total_amount = res['최종정산금액'].sum()
-        total_vat = res['부가세'].sum()
-        total_sum = total_amount + total_vat
-
         st.markdown("### 📊 정산 요약")
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("총 사용자수", f"{total_users:,} 명")
-        col2.metric("공급가액 합계", f"{total_amount:,} 원")
-        col3.metric("부가세 합계", f"{total_vat:,} 원")
-        col4.metric("최종 합계(VAT포함)", f"{total_sum:,} 원")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("총 사용자수", f"{res['사용자수'].sum():,} 명")
+        c2.metric("공급가액 합계", f"{res['최종정산금액'].sum():,} 원")
+        c3.metric("부가세 합계", f"{res['부가세'].sum():,} 원")
+        c4.metric("최종 합계(VAT포함)", f"{(res['최종정산금액'].sum() + res['부가세'].sum()):,} 원")
         
         st.divider()
         st.dataframe(res)
-        
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             res.to_excel(writer, index=False, sheet_name='정산내역')
         st.download_button("📥 엑셀 다운로드", output.getvalue(), f"정산_{target_month}.xlsx", "application/vnd.ms-excel")
 
+# --- [5. 데이터 초기화 메뉴] ---
+elif menu == "데이터 초기화":
+    st.subheader("🗑️ 구글 시트 데이터 초기화")
+    st.warning("주의: 초기화 시 시트의 모든 데이터가 영구적으로 삭제됩니다.")
+    
+    target_sheet = st.radio("초기화할 시트를 선택하세요", ["위멤버스 가입자", "위멤버스 사용자"])
+    
+    if st.button(f"🔥 {target_sheet} 시트 초기화"):
+        with st.spinner(f'{target_sheet} 데이터를 삭제 중...'):
+            client = get_gspread_client()
+            if client:
+                try:
+                    sheet = client.open_by_key(SPREADSHEET_ID).worksheet(target_sheet)
+                    sheet.clear()
+                    st.success(f"✅ {target_sheet} 시트가 성공적으로 초기화되었습니다.")
+                except Exception as e:
+                    st.error(f"초기화 중 오류 발생: {e}")
+
+# 업로드 분기
 elif menu == "가입자 시트 업로드":
     run_upload_ui("가입자 데이터", [0, 2, 4, 6, 16, 17, 18, 22, 23, 24, 25, 68, 74, 80, 83], "위멤버스 가입자")
 elif menu == "사용자 시트 업로드":
     run_upload_ui("사용자 데이터", [0, 2, 3, 9, 10], "위멤버스 사용자")
-elif menu == "데이터 초기화":
-    if st.button("🔥 시트 초기화"):
-        client = get_gspread_client()
-        if client: client.open_by_key(SPREADSHEET_ID).worksheet("위멤버스 가입자").clear(); st.success("초기화됨")
