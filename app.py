@@ -113,14 +113,11 @@ if menu == "정산 데이터 생성":
                             df_special = pd.DataFrame(special_raw[1:], columns=special_raw[0])
                             special_map = df_special.set_index(df_special.columns[0])[df_special.columns[4]].to_dict()
 
-                        # 날짜 설정
                         target_dt = datetime.strptime(target_month, "%Y-%m")
                         payment_date = target_dt.strftime("%Y%m") + "11"
-                        # 전월 계산
                         prev_dt = datetime(target_dt.year - 1, 12, 1) if target_dt.month == 1 else datetime(target_dt.year, target_dt.month - 1, 1)
                         prev_month_str = prev_dt.strftime("%Y%m")
 
-                        # 사용자 수 매핑
                         if len(user_raw) >= 2:
                             df_user = pd.DataFrame(user_raw[1:], columns=user_raw[0])
                             df_user_filtered = df_user[~df_user.iloc[:, 0].apply(lambda x: str(x).replace("-", "")[:6] == prev_month_str)]
@@ -129,37 +126,46 @@ if menu == "정산 데이터 생성":
                         else:
                             df_gaib['사용자수'] = 0
 
-                        # [통합 필터링 로직]
+                        # 필터링 로직
                         def filter_rows(row):
-                            # 1. 기본 필터링
                             if str(row.iloc[10]) == 'TEST' or str(row.iloc[7]) == '휴폐업' or str(row.iloc[2]) == '위멤버스 베이직':
                                 return False
-                            
-                            # 2. [추가] 가입일자가 정산월 전월(prev_month_str)이면 제외 (D열=인덱스 3)
                             join_month = str(row.iloc[3]).replace("-", "")[:6]
-                            if join_month == prev_month_str:
-                                return False
-
-                            # 3. 비대면_바우처 종료 여부 (H열=인덱스 7, J열=인덱스 9)
+                            if join_month == prev_month_str: return False
                             if str(row.iloc[7]) == '비대면_바우처':
                                 try:
                                     myeonje_end = str(row.iloc[9]).replace("-", "")[:6]
                                     target_str = target_month.replace("-", "")
                                     if myeonje_end >= target_str: return False
                                 except: pass
-                            
-                            # 4. [추가] L열(인덱스 11)이 자동이체일 때 M열(인덱스 12)이 X이거나 없으면 제외
-                            pay_method = str(row.iloc[11]).strip()
-                            bank_status = str(row.iloc[12]).strip()
+                            pay_method, bank_status = str(row.iloc[11]).strip(), str(row.iloc[12]).strip()
                             if pay_method == '자동이체':
-                                if bank_status == 'X' or bank_status == '' or bank_status == 'None':
-                                    return False
-                            
+                                if bank_status in ['X', '', 'None']: return False
                             return True
 
                         df_gaib = df_gaib[df_gaib.apply(filter_rows, axis=1)]
 
-                        # 정산 금액 계산
+                        # [추가 요청 로직] 제품명 버전 관리 함수
+                        def get_versioned_product_name(row):
+                            product_name = str(row.iloc[2]).strip()
+                            try:
+                                join_dt = pd.to_datetime(row.iloc[3])
+                                base_dt = pd.to_datetime('2025-01-01')
+                                
+                                # 가입일자 기준 버전 판별
+                                version = "1.0" if join_dt < base_dt else "2.0"
+                                
+                                if "위멤버스 스탠다드" in product_name:
+                                    return f"위멤버스 스탠다드 {version}"
+                                elif "위멤버스 프리미엄" in product_name:
+                                    return f"위멤버스 프리미엄 {version}"
+                                return product_name
+                            except:
+                                return product_name
+
+                        df_gaib['제품명_버전'] = df_gaib.apply(get_versioned_product_name, axis=1)
+
+                        # 금액 계산
                         def calculate_final(row):
                             gaib_no = str(row.iloc[0]).strip()
                             if gaib_no in special_map:
@@ -182,7 +188,9 @@ if menu == "정산 데이터 생성":
                         df_gaib['입금일자'] = payment_date
                         df_gaib['결제코드'] = df_gaib.iloc[:, 11].apply(lambda x: 'A' if '자동이체' in str(x) else ('C' if '신용카드' in str(x) else x))
 
-                        result_df = df_gaib[[df_gaib.columns[0], df_gaib.columns[1], '입금일자', df_gaib.columns[2], '결제코드', '사용자수', '최종정산금액', '부가세']]
+                        # 결과 데이터프레임 (제품명 컬럼을 버전이 포함된 제품명으로 대체)
+                        result_df = df_gaib[[df_gaib.columns[0], df_gaib.columns[1], '입금일자', '제품명_버전', '결제코드', '사용자수', '최종정산금액', '부가세']]
+                        result_df.columns = ['가입번호', '거래처명', '입금일자', '제품명', '결제코드', '사용자수', '최종정산금액', '부가세']
                         st.session_state['result_df'] = result_df.reset_index(drop=True)
                         st.success(f"✅ {target_month} 정산 완료!")
 
@@ -211,7 +219,7 @@ if menu == "정산 데이터 생성":
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             res.to_excel(writer, index=False, sheet_name='정산내역')
-        st.download_button("📥 정산 결과 엑셀 다운로드", output.getvalue(), f"정산_{target_month}.xlsx", "application/vnd.ms-excel")
+        st.download_button("📥 엑셀 다운로드", output.getvalue(), f"정산_{target_month}.xlsx", "application/vnd.ms-excel")
 
 elif menu == "가입자 시트 업로드":
     run_upload_ui("가입자 데이터", [0, 2, 4, 6, 16, 17, 18, 22, 23, 24, 25, 68, 74, 80, 83], "위멤버스 가입자")
