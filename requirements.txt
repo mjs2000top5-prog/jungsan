@@ -4,4 +4,5 @@ gspread
 msoffcrypto-tool
 xlsxwriter
 google-auth
-openpyxl  #
+openpyxl
+xlrd >= 2.0.1 
