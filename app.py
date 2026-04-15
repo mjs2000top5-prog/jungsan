@@ -113,11 +113,14 @@ if menu == "정산 데이터 생성":
                             df_special = pd.DataFrame(special_raw[1:], columns=special_raw[0])
                             special_map = df_special.set_index(df_special.columns[0])[df_special.columns[4]].to_dict()
 
+                        # 날짜 설정
                         target_dt = datetime.strptime(target_month, "%Y-%m")
                         payment_date = target_dt.strftime("%Y%m") + "11"
+                        # 전월 계산
                         prev_dt = datetime(target_dt.year - 1, 12, 1) if target_dt.month == 1 else datetime(target_dt.year, target_dt.month - 1, 1)
                         prev_month_str = prev_dt.strftime("%Y%m")
 
+                        # 사용자 수 매핑
                         if len(user_raw) >= 2:
                             df_user = pd.DataFrame(user_raw[1:], columns=user_raw[0])
                             df_user_filtered = df_user[~df_user.iloc[:, 0].apply(lambda x: str(x).replace("-", "")[:6] == prev_month_str)]
@@ -126,21 +129,37 @@ if menu == "정산 데이터 생성":
                         else:
                             df_gaib['사용자수'] = 0
 
+                        # [통합 필터링 로직]
                         def filter_rows(row):
+                            # 1. 기본 필터링
                             if str(row.iloc[10]) == 'TEST' or str(row.iloc[7]) == '휴폐업' or str(row.iloc[2]) == '위멤버스 베이직':
                                 return False
-                            if str(row.iloc[3]).replace("-", "")[:6] == prev_month_str:
+                            
+                            # 2. [추가] 가입일자가 정산월 전월(prev_month_str)이면 제외 (D열=인덱스 3)
+                            join_month = str(row.iloc[3]).replace("-", "")[:6]
+                            if join_month == prev_month_str:
                                 return False
+
+                            # 3. 비대면_바우처 종료 여부 (H열=인덱스 7, J열=인덱스 9)
                             if str(row.iloc[7]) == '비대면_바우처':
                                 try:
                                     myeonje_end = str(row.iloc[9]).replace("-", "")[:6]
                                     target_str = target_month.replace("-", "")
                                     if myeonje_end >= target_str: return False
                                 except: pass
+                            
+                            # 4. [추가] L열(인덱스 11)이 자동이체일 때 M열(인덱스 12)이 X이거나 없으면 제외
+                            pay_method = str(row.iloc[11]).strip()
+                            bank_status = str(row.iloc[12]).strip()
+                            if pay_method == '자동이체':
+                                if bank_status == 'X' or bank_status == '' or bank_status == 'None':
+                                    return False
+                            
                             return True
 
                         df_gaib = df_gaib[df_gaib.apply(filter_rows, axis=1)]
 
+                        # 정산 금액 계산
                         def calculate_final(row):
                             gaib_no = str(row.iloc[0]).strip()
                             if gaib_no in special_map:
@@ -173,7 +192,7 @@ if menu == "정산 데이터 생성":
     if 'result_df' in st.session_state:
         res = st.session_state['result_df']
         
-        # --- [요청 사항: 합계 정보 요약 대시보드 추가] ---
+        # 합계 정보 요약
         total_users = res['사용자수'].sum()
         total_amount = res['최종정산금액'].sum()
         total_vat = res['부가세'].sum()
