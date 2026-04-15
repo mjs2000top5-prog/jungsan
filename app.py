@@ -145,23 +145,17 @@ if menu == "정산 데이터 생성":
 
                         df_gaib = df_gaib[df_gaib.apply(filter_rows, axis=1)]
 
-                        # [추가 요청 로직] 제품명 버전 관리 함수
+                        # 제품명 버전 관리
                         def get_versioned_product_name(row):
                             product_name = str(row.iloc[2]).strip()
                             try:
                                 join_dt = pd.to_datetime(row.iloc[3])
                                 base_dt = pd.to_datetime('2025-01-01')
-                                
-                                # 가입일자 기준 버전 판별
                                 version = "1.0" if join_dt < base_dt else "2.0"
-                                
-                                if "위멤버스 스탠다드" in product_name:
-                                    return f"위멤버스 스탠다드 {version}"
-                                elif "위멤버스 프리미엄" in product_name:
-                                    return f"위멤버스 프리미엄 {version}"
+                                if "위멤버스 스탠다드" in product_name: return f"위멤버스 스탠다드 {version}"
+                                elif "위멤버스 프리미엄" in product_name: return f"위멤버스 프리미엄 {version}"
                                 return product_name
-                            except:
-                                return product_name
+                            except: return product_name
 
                         df_gaib['제품명_버전'] = df_gaib.apply(get_versioned_product_name, axis=1)
 
@@ -188,7 +182,6 @@ if menu == "정산 데이터 생성":
                         df_gaib['입금일자'] = payment_date
                         df_gaib['결제코드'] = df_gaib.iloc[:, 11].apply(lambda x: 'A' if '자동이체' in str(x) else ('C' if '신용카드' in str(x) else x))
 
-                        # 결과 데이터프레임 (제품명 컬럼을 버전이 포함된 제품명으로 대체)
                         result_df = df_gaib[[df_gaib.columns[0], df_gaib.columns[1], '입금일자', '제품명_버전', '결제코드', '사용자수', '최종정산금액', '부가세']]
                         result_df.columns = ['가입번호', '거래처명', '입금일자', '제품명', '결제코드', '사용자수', '최종정산금액', '부가세']
                         st.session_state['result_df'] = result_df.reset_index(drop=True)
@@ -200,6 +193,14 @@ if menu == "정산 데이터 생성":
     if 'result_df' in st.session_state:
         res = st.session_state['result_df']
         
+        # --- [안내 사항 추가] ---
+        st.info("""
+        **📌 정산 안내 사항**
+        1. 위멤버스 프리미엄 1.0 : 50,000원  /  2. 위멤버스 스탠다드 1.0 : 30,000원
+        3. 위멤버스 프리미엄 2.0 : 60,000원  /  4. 위멤버스 스탠다드 2.0 : 36,000원
+        5. 결제코드 **A** : 자동이체  /  6. 결제코드 **C** : 신용카드
+        """)
+
         # 합계 정보 요약
         total_users = res['사용자수'].sum()
         total_amount = res['최종정산금액'].sum()
